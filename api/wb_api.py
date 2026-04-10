@@ -2,16 +2,16 @@
 API module for Wildberries feedbacks - FIXED to match docs
 """
 import time
-import requests
 import random
+import requests
 from typing import List, Dict, Optional
 from utils import logger
-from collections import deque  # not used
 
 class WBAPI:
     """WB Feedbacks API https://feedbacks-api.wildberries.ru/api/v1 | Rate 3/sec burst 6"""
     
     BASE_URL = "https://feedbacks-api.wildberries.ru/api/v1"
+    REQUEST_TIMEOUT = (5, 20)
     
     def __init__(self, api_key: str):
         self.api_key = api_key
@@ -28,6 +28,23 @@ class WBAPI:
         if sleep_duration > 0:
             time.sleep(sleep_duration)
         self.last_time = time.time()
+
+    @staticmethod
+    def _safe_json(response, endpoint: str) -> Optional[Dict]:
+        """Безопасно парсит JSON-ответ WB API."""
+        try:
+            data = response.json()
+        except ValueError as error:
+            logger.error(
+                f"WB [{endpoint}] invalid JSON in HTTP{response.status_code}: {error} | body={response.text[:300]}"
+            )
+            return None
+
+        if not isinstance(data, dict):
+            logger.error(f"WB [{endpoint}] unexpected JSON type: {type(data).__name__}")
+            return None
+
+        return data
     
     def _make_request(self, method: str, endpoint: str, params: Optional[Dict] = None, json_data: Optional[Dict] = None) -> Optional[Dict]:
         self._rate_limit_sleep()
@@ -36,45 +53,78 @@ class WBAPI:
         for attempt in range(retries):
             try:
                 if method.upper() == 'POST':
-                    response = self.session.post(url, params=params, json=json_data)
+                    response = self.session.post(url, params=params, json=json_data, timeout=self.REQUEST_TIMEOUT)
                 else:
-                    response = self.session.get(url, params=params)
-                
-                if response.status_code == 204:
-                    return True
-                
-                data = response.json()
-                
-                if not data.get('error', True):
-                    return data.get('data')
-                
-                err_text = data.get('errorText', '')
-                add_errors = data.get('additionalErrors', [])
-                logger.error(f"WB [{endpoint}] HTTP{response.status_code}: {err_text} | {add_errors}")
-                
-                if response.status_code == 429:
-                    backoff = 2 ** attempt + random.uniform(0, 1)
-                    logger.warning(f"WB 429 - backoff {backoff:.1f}s")
-                    time.sleep(backoff)
-                    continue
-                
-                if attempt == retries - 1:
-                    return None
-                time.sleep(1.5 * (attempt + 1))
-                
-            except Exception as e:
-                logger.error(f"WB [{endpoint}] exception: {e}")
+                    response = self.session.get(url, params=params, timeout=self.REQUEST_TIMEOUT)
+
+            except requests.exceptions.Timeout as error:
+                logger.error(f"WB [{endpoint}] timeout on attempt {attempt + 1}/{retries}: {error}")
                 if attempt < retries - 1:
                     time.sleep(2 ** attempt)
                     continue
                 return None
+
+            except requests.exceptions.ConnectionError as error:
+                logger.error(f"WB [{endpoint}] connection error on attempt {attempt + 1}/{retries}: {error}")
+                if attempt < retries - 1:
+                    time.sleep(2 ** attempt)
+                    continue
+                return None
+
+            except requests.exceptions.RequestException as error:
+                logger.error(f"WB [{endpoint}] request exception on attempt {attempt + 1}/{retries}: {error}")
+                if attempt < retries - 1:
+                    time.sleep(2 ** attempt)
+                    continue
+                return None
+
+            if response.status_code == 204:
+                return True
+
+            if response.status_code == 403:
+                logger.error(f"WB [{endpoint}] HTTP403: {response.text}")
+                return None
+
+            if response.status_code == 429:
+                backoff = 2 ** attempt + random.uniform(0, 1)
+                logger.warning(f"WB [{endpoint}] HTTP429 - backoff {backoff:.1f}s")
+                if attempt < retries - 1:
+                    time.sleep(backoff)
+                    continue
+                return None
+
+            if response.status_code != 200:
+                logger.error(f"WB [{endpoint}] HTTP{response.status_code}: {response.text}")
+                if attempt < retries - 1:
+                    time.sleep(1.5 * (attempt + 1))
+                    continue
+                return None
+
+            data = self._safe_json(response, endpoint)
+            if data is None:
+                return None
+
+            if not data.get('error', True):
+                return data.get('data')
+
+            err_text = data.get('errorText', '')
+            add_errors = data.get('additionalErrors', [])
+            logger.error(f"WB [{endpoint}] HTTP{response.status_code}: {err_text} | {add_errors}")
+            if attempt < retries - 1:
+                time.sleep(1.5 * (attempt + 1))
+                continue
+            return None
         return None
     
     def get_unanswered_count(self) -> Dict:
         data = self._make_request("GET", "feedbacks/count-unanswered")
-        count = data.get('countUnanswered', 0) if data else 0
+        if not isinstance(data, dict) or "countUnanswered" not in data:
+            logger.error(f"WB unanswered probe failed: invalid response {data!r}")
+            return {}
+
+        count = data.get('countUnanswered', 0)
         logger.info(f"WB unanswered: {count}")
-        return data or {}
+        return data
     
     def get_feedbacks(self, is_answered: bool = False, take: int = 500, skip: int = 0, date_from: Optional[int] = None, date_to: Optional[int] = None, nm_id: Optional[int] = None, order: str = "dateDesc") -> List[Dict]:
         params = {

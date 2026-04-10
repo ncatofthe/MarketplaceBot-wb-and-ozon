@@ -1,264 +1,223 @@
-```markdown
-# MarketplaceBot 🤖🛒 – Полное руководство
+# MarketplaceBot
 
 [![Python](https://img.shields.io/badge/Python-3.8+-3776AB.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-[![Platform](https://img.shields.io/badge/Platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)]()
+Локальный desktop MVP на Python + Tkinter для автоответов на отзывы Ozon и Wildberries.
 
-**Автоматический бот для ответов на отзывы Ozon и Wildberries.**  
-Графический интерфейс, шаблоны по звёздам (1⭐ извинения → 5⭐ благодарность), детальные логи, готовая сборка EXE.
+## Статус
 
----
+- Основной рабочий сценарий по-прежнему поддерживается и для source/dev запуска, и для Windows packaging.
+- Windows packaging теперь собирается через PyInstaller из зафиксированного spec-файла.
+- Инсталлятора, auto-update и code signing в проекте пока нет.
+- Реальный Windows smoke нужно выполнять отдельно на Win10/11. В этом репозитории он описан как manual checklist, но не заявлен как уже пройденный.
 
-## 📋 Содержание
-- [Как это работает](#-как-это-работает)
-- [Требования](#-требования)
-- [Быстрый старт](#-быстрый-старт)
-  - [Готовый EXE (Windows)](#-готовый-exe-windows)
-  - [Запуск из исходников (Windows/Linux/macOS)](#-запуск-из-исходников-windowslinuxmacos)
-- [Настройка API ключей](#-настройка-api-ключей)
-- [Интерфейс (GUI)](#-интерфейс-gui)
-- [Структура проекта](#-структура-проекта)
-- [Кастомизация](#-кастомизация)
-- [Тестирование](#-тестирование)
-- [Поиск и устранение ошибок](#-поиск-и-устранение-ошибок)
-- [Сборка EXE](#-сборка-exe)
-- [Лицензия и поддержка](#-лицензия-и-поддержка)
+## Что делает приложение
 
----
+1. Поднимает локальный GUI.
+2. Хранит конфиг, шаблоны, review state и single-instance lock в пользовательских runtime-папках.
+3. Запускает отдельных ботов для Ozon и Wildberries, включая multi-account сценарий.
+4. Пишет runtime-логи локально на машине пользователя.
 
-## 🎯 Как это работает (шаг за шагом)
+## Требования
 
-1. **Каждые N минут** (настраивается, по умолчанию 60) бот запрашивает через API **неотвеченные** (`UNPROCESSED`) отзывы.
-2. **Получение данных**: ID отзыва, рейтинг (1–5), текст отзыва, наличие ответа продавца.
-3. **Фильтрация** по `min_stars`: если рейтинг ниже заданного – отзыв пропускается.
-4. **Генерация ответа**: из списка шаблонов для данного рейтинга выбирается случайный.
-5. **Отправка ответа** через API и **пометка отзыва как обработанного** (`PROCESSED`).
-6. **Логирование** каждого действия: `Raw rating=1 (int) → extracted=1 → выбран шаблон '...' → отправлено`.
+### Runtime
 
-### 📌 Пример лога
-```
-Ozon ID=abc: Raw rating=1 (int), extracted=1, keys=['rating','text']
-OzonBot: Отзыв abc (1⭐, comment=True): 'Нам жаль за 1⭐. Извините. Свяжитесь...'
-Ответ отправлен, статус PROCESSED.
-```
+- Python `>=3.8`
+- `tkinter` в установленном Python
+- доступ в интернет к API Ozon и Wildberries
 
----
+Установка runtime dependencies:
 
-## 📥 Требования
-
-| Компонент      | Требование                             |
-|----------------|----------------------------------------|
-| Python         | 3.8 или выше (для запуска из кода)     |
-| Операционная   | Windows, Linux (с tkinter), macOS      |
-| Дополнительно  | Интернет, доступ к API Ozon/Wildberries |
-
-**Зависимости Python** (устанавливаются одной командой):
 ```bash
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
 ```
-Главные библиотеки: `requests`, `pycryptodome` (для WB), `tkinter` (встроен в Python).
 
----
+### Build
 
-## 🚀 Быстрый старт
+Build dependencies вынесены отдельно и не засоряют runtime manifest:
 
-### ✅ Готовый EXE (Windows – самый простой способ)
-1. Скачайте последний **MarketplaceBot.exe** из раздела [Releases](https://github.com/yourusername/MarketplaceBot/releases).
-2. Запустите двойным кликом – откроется главное окно.
-3. Введите API ключи в настройках и нажмите **Старт**.
-> Если антивирус блокирует – добавьте в исключения или используйте запуск из исходников.
+```bash
+python -m pip install -r requirements-build.txt
+```
 
-### 🐍 Запуск из исходников (Windows/Linux/macOS)
+`requirements-build.txt` включает runtime requirements и PyInstaller.
 
-#### Windows
-1. **Установите Python** с [python.org](https://www.python.org/downloads/windows/) (обязательно отметьте "Add to PATH").
-2. Откройте **Командную строку** (Win+R → `cmd`).
-3. Выполните:
+## Запуск из исходников
+
+### Windows
+
 ```cmd
-git clone https://github.com/yourusername/MarketplaceBot.git
-cd MarketplaceBot
-pip install -r requirements.txt
+py -3 -m venv .venv
+.venv\Scripts\activate
+python -m pip install -r requirements.txt
+copy settings\config.example.json settings\config.local.json
+copy settings\answers.example.json settings\answers.local.json
 python main.py
 ```
 
-#### Linux (Ubuntu/Debian)
+### Linux / macOS
+
 ```bash
-sudo apt update
-sudo apt install python3 python3-pip python3-tk git
-git clone https://github.com/yourusername/MarketplaceBot.git
-cd MarketplaceBot
-pip3 install -r requirements.txt
-python3 main.py
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+cp settings/config.example.json settings/config.local.json
+cp settings/answers.example.json settings/answers.local.json
+python main.py
 ```
 
-#### macOS
+## Как собрать Windows `.exe`
+
+Сборку нужно запускать на Windows.
+
+### Вариант через `build.bat`
+
+```cmd
+py -3 -m venv .venv
+.venv\Scripts\activate
+python -m pip install -r requirements-build.txt
+build.bat
+```
+
+Что делает `build.bat`:
+
+- проверяет наличие Python;
+- проверяет, что установлен `PyInstaller`;
+- запускает реальную сборку через `MarketplaceBot.spec`;
+- завершает процесс ошибкой, если spec или build dependency отсутствуют.
+
+### Вариант вручную
+
+```cmd
+py -3 -m venv .venv
+.venv\Scripts\activate
+python -m pip install -r requirements-build.txt
+python -m PyInstaller --clean --noconfirm MarketplaceBot.spec
+```
+
+### Результат сборки
+
+PyInstaller собирает onedir-package:
+
+- `dist\MarketplaceBot\MarketplaceBot.exe`
+
+`MarketplaceBot.exe` нужно запускать вместе с содержимым папки `dist\MarketplaceBot`, не выдёргивая exe отдельно.
+
+## First Run у compiled app
+
+При первом запуске собранного Windows-приложения:
+
+1. Приложение определяет runtime-папки пользователя.
+2. Если в пользовательской папке настроек ещё нет example-файлов, bundled `config.example.json` и `answers.example.json` копируются туда автоматически.
+3. Создаётся папка логов пользователя.
+4. После первого сохранения настроек GUI создаёт `config.local.json`.
+5. После первого сохранения шаблонов GUI создаёт `answers.local.json`.
+6. При запуске single-instance lock не даёт открыть второй экземпляр параллельно.
+
+Форматы `config.local.json` и `answers.local.json` source/dev режим не меняют.
+
+## Где хранятся данные пользователя
+
+### Source/dev режим
+
+- настройки и шаблоны: локальная папка репозитория `settings/`
+- логи: локальная папка репозитория `logs/`
+
+### Frozen Windows runtime
+
+- настройки, шаблоны, review state и lock: `%APPDATA%\MarketplaceBot\settings`
+- логи: `%LOCALAPPDATA%\MarketplaceBot\logs`
+
+Обычно в `%APPDATA%\MarketplaceBot\settings` будут лежать:
+
+- `config.example.json`
+- `answers.example.json`
+- `config.local.json`
+- `answers.local.json`
+- `review_state.json`
+- `marketplacebot.lock`
+
+## Секреты и защита ключей
+
+- `config.example.json` и `answers.example.json` в репозитории не содержат секретов.
+- Рабочие ключи сохраняются только в `config.local.json`.
+- На Windows API keys при сохранении защищаются через DPAPI для текущего пользователя Windows на текущей машине.
+- Если реальные ключи раньше попадали в Git-историю, их нужно перевыпустить у Ozon и Wildberries.
+
+Поддерживаются env overrides:
+
+- `MARKETPLACEBOT_OZON_API_KEY`
+- `MARKETPLACEBOT_OZON_COMPANY_ID`
+- `MARKETPLACEBOT_WB_API_KEY`
+- `MARKETPLACEBOT_WILDBERRIES_API_KEY`
+
+## Тесты и локальные проверки
+
+Unit/smoke тесты:
+
 ```bash
-brew install python git
-git clone https://github.com/yourusername/MarketplaceBot.git
-cd MarketplaceBot
-pip3 install -r requirements.txt
-python3 main.py
+python -m unittest discover -s tests -v
 ```
 
----
+Проверка компиляции Python-модулей:
 
-## 🔑 Настройка API ключей
-
-### Ozon
-1. Войдите в [seller.ozon.ru](https://seller.ozon.ru) → **Настройки** → **API ключи**.
-2. Создайте новый ключ с правами **Отзывы** (чтение и запись).
-3. Скопируйте **API ключ** (UUID) и **Client ID**.
-
-### Wildberries
-1. Войдите в [seller.wb.ru](https://seller.wb.ru) → **Настройки** → **Доступ к API**.
-2. Создайте токен с правами **Отзывы**.
-3. Скопируйте **токен**.
-
-Все ключи вводятся в GUI (вкладка **Settings**) и сохраняются в `settings/config.json`.
-
----
-
-## 🖥️ Интерфейс (GUI)
-
-Главное окно состоит из четырёх вкладок:
-
-| Вкладка      | Назначение                                                                 |
-|--------------|----------------------------------------------------------------------------|
-| **Settings** | Включение маркетплейсов, ввод API ключей, выбор минимальной звезды (`min_stars`) и интервала проверки (в минутах). Кнопки **Save** и **Start/Stop**. |
-| **Templates**| Редактирование шаблонов ответов для каждого рейтинга (1–5). Можно добавлять несколько вариантов – бот выберет случайный. |
-| **Logs**     | Потоковое отображение логов работы бота.                                   |
-| **Status**   | Индикаторы работы ботов, статистика обработанных отзывов.                  |
-
----
-
-## 📁 Структура проекта (подробно)
-
+```bash
+python3 -m compileall main.py config.py api bots gui utils tests runtime_paths.py runtime_assets.py
 ```
+
+При изменении packaging/bootstrap также полезно проверить:
+
+```bash
+python3 -m py_compile runtime_assets.py
+python3 -m py_compile config.py
+```
+
+## Manual Smoke Checklist для Win10/11
+
+Этот список нужно пройти на реальной Windows-машине после сборки:
+
+1. Запустить `dist\MarketplaceBot\MarketplaceBot.exe`.
+2. Убедиться, что первый запуск создал пользовательские runtime-папки и example-файлы.
+3. Ввести ключи Ozon/WB в GUI и сохранить настройки.
+4. Проверить, что после сохранения появился `config.local.json`.
+5. Перезапустить приложение и убедиться, что настройки и аккаунты сохранились.
+6. Проверить multi-account: добавить несколько аккаунтов одного маркетплейса и сохранить.
+7. Проверить запуск только включённых аккаунтов.
+8. Проверить остановку всех ботов из GUI.
+9. Проверить single-instance: второй запуск должен показать предупреждение и не открыть второй экземпляр.
+10. Проверить, что логи пишутся в `%LOCALAPPDATA%\MarketplaceBot\logs`.
+11. После сохранения настроек снова запустить приложение и убедиться, что ключи корректно подхватываются.
+
+## Ключевые файлы
+
+```text
 MarketplaceBot/
-├── main.py                      # Точка входа (запуск GUI)
-├── config.py                    # Загрузка/сохранение конфигурации
-├── settings/
-│   ├── config.json              # Файл настроек (создаётся автоматически, в .gitignore)
-│   └── config.example.json       # Пример конфигурации
-├── api/
-│   ├── ozon_api.py              # Работа с API Ozon (список отзывов, ответы, пагинация)
-│   └── wb_api.py                # Работа с API Wildberries
-├── bots/
-│   ├── base_bot.py              # Базовый класс с циклом обработки и логикой
-│   ├── ozon_bot.py              # Реализация для Ozon
-│   └── wildberries_bot.py       # Реализация для Wildberries
-├── gui/
-│   └── main_window.py           # Основное окно (вкладки, виджеты)
-├── utils/
-│   ├── logger.py                # Настройка логирования (консоль + файл)
-│   └── answers.py               # Генерация ответов по шаблонам
-├── tests/                         # Тесты
-│   ├── test_all.py              # Интеграционный тест: импорты, конфиг, ответы
-│   ├── test_ozon_full.py        # Реальный прогон Ozon (обработано 163 отзыва)
-│   ├── test_ozon.py             # Проверка получения отзывов
-│   └── test_check.py            # Быстрая проверка импортов
-├── docs/                           # Документация на русском
-│   ├── ИНСТРУКЦИЯ.md
-│   ├── CHANGELOG.md
-│   └── ИСПРАВЛЕНИЯ.md
-├── build/                          # Сборка EXE
-│   ├── MarketplaceBot.spec
-│   ├── build.bat                   # Скрипт для сборки
-│   └── dist/
-│       └── MarketplaceBot.exe
+├── MarketplaceBot.spec
+├── build.bat
 ├── requirements.txt
-└── .gitignore
+├── requirements-build.txt
+├── runtime_paths.py
+├── runtime_assets.py
+├── secure_storage.py
+├── single_instance.py
+├── config.py
+├── main.py
+├── api/
+├── bots/
+├── gui/
+├── settings/
+├── tests/
+└── utils/
 ```
 
----
+## Ограничения до финального релиза
 
-## 🎛️ Кастомизация
+- Windows packaging flow подготовлен, но не заменяет реальный smoke на Win10/11.
+- Инсталлятора и code signing пока нет.
+- Нет автосборки через CI.
+- Нет подписанного релизного артефакта.
 
-### 1. Шаблоны ответов
-Изменить тексты можно прямо в GUI (вкладка **Templates**) или вручную в файле `settings/config.json`:
+## Лицензия
 
-```json
-"templates": {
-  "1": ["Нам очень жаль, что так вышло...", "Извините за доставленные неудобства..."],
-  "5": ["Спасибо за высокую оценку!", "Рады, что вам понравилось!"]
-}
-```
-
-### 2. Основные настройки
-В `config.json` также можно изменить:
-- `min_stars` – минимальный рейтинг для ответа (1 – отвечать на все, 4 – только на 4 и 5).
-- `interval_minutes` – периодичность проверки.
-- Включение/отключение маркетплейсов.
-
-### 3. Уровень логирования
-Добавьте в `config.json` строку `"log_level": "DEBUG"` для более подробных логов (по умолчанию INFO).
-
----
-
-## 🧪 Тестирование
-
-Все тесты находятся в папке `tests/`. Для их запуска выполните:
-
-```bash
-python -m unittest discover tests/
-```
-
-Или по отдельности:
-```bash
-python tests/test_all.py          # [SUCCESS] – всё хорошо
-python tests/test_ozon_full.py    # Реальный прогон Ozon (выводит логи)
-python tests/test_ozon.py         # Проверка получения отзывов
-python tests/test_check.py        # Быстрая проверка импортов
-```
-
-**test_ozon_full.py** реально обращается к API (только чтение) и логирует найденные отзывы – полезно для проверки интеграции.
-
----
-
-## 🚨 Поиск и устранение ошибок
-
-### Где смотреть логи
-- **GUI → Logs** – в реальном времени.
-- **Файлы логов** – в папке `logs/` (например, `2026-03-16-14-06-49.log`). Открывайте блокнотом или VS Code.
-
-### Частые ошибки и решения
-
-| Проблема                           | Вероятное решение                                         |
-|------------------------------------|-----------------------------------------------------------|
-| `API key invalid`                  | Проверьте ключи в личном кабинете Ozon/WB, пересоздайте. |
-| `No reviews found`                 | Убедитесь, что `min_stars` не слишком высок, и есть неотвеченные отзывы. |
-| `403 Forbidden / антибот`          | Бот автоматически делает паузы при ошибках. Если повторяется – проверьте IP. |
-| `ImportError: No module named ...` | Выполните `pip install -r requirements.txt` в окружении.  |
-| Бот не запускается в EXE           | Попробуйте запустить `python main.py`, возможно, проблема с антивирусом. |
-
-Подробный разбор ошибок есть в `docs/ИСПРАВЛЕНИЯ.md`.
-
----
-
-## 🔨 Сборка EXE (для Windows)
-
-Если хотите собрать исполняемый файл самостоятельно:
-
-```bash
-pip install pyinstaller
-pyinstaller build/MarketplaceBot.spec
-# или запустите build.bat
-```
-
-Готовый `.exe` появится в `build/dist/MarketplaceBot.exe`.  
-Его можно распространять – Python не требуется.
-
----
-
-## 📄 Лицензия и поддержка
-
-Проект распространяется под лицензией **MIT** – можно использовать, модифицировать и распространять свободно.
-
-Если возникли вопросы или предложения:
-- Создайте **Issue** на GitHub.
-- Или напишите в Telegram: [@your_nickname](https://t.me/karameliew).
-
-**Удачных продаж!** 🚀
-```
+Проект распространяется под лицензией MIT. См. [LICENSE](LICENSE).

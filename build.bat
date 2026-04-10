@@ -1,50 +1,94 @@
 @echo off
-chcp 65001 >nul
+setlocal EnableExtensions
+
 cd /d "%~dp0"
-
-echo ========================================
-echo Сборка MarketplaceBot.exe
-echo ========================================
-
-:: Проверка наличия Python
-python --version >nul 2>&1
 if errorlevel 1 (
-    echo ОШИБКА: Python не найден!
-    echo Установите Python 3.8+ с сайта python.org
-    pause
+    echo [ERROR] Failed to change directory to the project root.
     exit /b 1
 )
 
-:: Установка PyInstaller если не установлен
-python -c "import PyInstaller" >nul 2>&1
+set "SPEC_FILE=MarketplaceBot.spec"
+set "BUILD_REQUIREMENTS=requirements-build.txt"
+set "OUTPUT_EXE=dist\MarketplaceBot\MarketplaceBot.exe"
+set "PYTHON_EXE="
+set "PYTHON_ARGS="
+
+if exist ".venv\Scripts\python.exe" (
+    set "PYTHON_EXE=%CD%\.venv\Scripts\python.exe"
+    goto :python_ready
+)
+
+if defined VIRTUAL_ENV (
+    if exist "%VIRTUAL_ENV%\Scripts\python.exe" (
+        set "PYTHON_EXE=%VIRTUAL_ENV%\Scripts\python.exe"
+        goto :python_ready
+    )
+)
+
+for %%I in (py.exe) do if not "%%~$PATH:I"=="" (
+    set "PYTHON_EXE=%%~$PATH:I"
+    set "PYTHON_ARGS=-3"
+    goto :python_ready
+)
+
+for %%I in (python.exe) do if not "%%~$PATH:I"=="" (
+    set "PYTHON_EXE=%%~$PATH:I"
+    goto :python_ready
+)
+
+echo [ERROR] Python 3 was not found.
+echo Activate a virtual environment or install Python, then try again.
+exit /b 1
+
+:python_ready
+if not exist "%SPEC_FILE%" (
+    echo [ERROR] Spec file not found: %SPEC_FILE%
+    exit /b 1
+)
+
+if not exist "%BUILD_REQUIREMENTS%" (
+    echo [ERROR] Build requirements file not found: %BUILD_REQUIREMENTS%
+    exit /b 1
+)
+
+"%PYTHON_EXE%" %PYTHON_ARGS% -m PyInstaller --version >nul 2>&1
 if errorlevel 1 (
-    echo Установка PyInstaller...
-    pip install pyinstaller
+    echo [ERROR] PyInstaller is not available in the selected environment.
+    echo Install build dependencies with:
+    echo   "%PYTHON_EXE%" %PYTHON_ARGS% -m pip install -r %BUILD_REQUIREMENTS%
+    exit /b 1
 )
 
-:: Очистка старой сборки
-if exist "dist\MarketplaceBot.exe" (
-    echo Удаление старой версии...
-    del /q "dist\MarketplaceBot.exe"
-)
-
-:: Сборка с использованием spec файла
+echo ========================================
+echo Building MarketplaceBot
+echo ========================================
+echo Python : %PYTHON_EXE% %PYTHON_ARGS%
+echo Spec   : %SPEC_FILE%
 echo.
-echo Сборка exe-файла...
-python -m PyInstaller MarketplaceBot.spec --noconfirm
 
-if exist "dist\MarketplaceBot.exe" (
+if exist "build" (
+    rmdir /s /q "build"
+)
+
+if exist "dist\MarketplaceBot" (
+    rmdir /s /q "dist\MarketplaceBot"
+)
+
+"%PYTHON_EXE%" %PYTHON_ARGS% -m PyInstaller --clean --noconfirm "%SPEC_FILE%"
+if errorlevel 1 (
     echo.
-    echo ========================================
-    echo Сборка завершена успешно!
-    echo Файл: dist\MarketplaceBot.exe
-    echo ========================================
-) else (
+    echo [ERROR] PyInstaller failed.
+    exit /b 1
+)
+
+if not exist "%OUTPUT_EXE%" (
     echo.
-    echo ОШИБКА: Не удалось создать exe-файл!
-    echo Проверьте сообщения об ошибках выше
+    echo [ERROR] Build finished without the expected file:
+    echo         %OUTPUT_EXE%
+    exit /b 1
 )
 
 echo.
-pause
-
+echo [OK] Build completed successfully.
+echo Output: %OUTPUT_EXE%
+exit /b 0

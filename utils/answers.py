@@ -29,6 +29,7 @@ class AnswerGenerator:
         Returns:
             str: сгенерированный ответ
         """
+        self.templates = config.get_answer_templates()
         parts = []
         
         # Приветствие (50% шанс)

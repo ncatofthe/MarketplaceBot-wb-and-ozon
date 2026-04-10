@@ -2,20 +2,16 @@
 API модуль для Ozon (Official v1/review endpoints)
 """
 import time
-import requests
 import json
+import requests
 from typing import List, Dict, Optional
 from utils import logger
-from datetime import datetime, timedelta
-
-# Add class var for debug
-
-
 
 class OzonAPI:
     """Класс для работы с официальным API Ozon v1/review"""
     
     BASE_URL = "https://api-seller.ozon.ru"
+    REQUEST_TIMEOUT = (5, 20)
     
     def __init__(self, api_key: str, company_id: str):
         self.api_key = api_key
@@ -28,6 +24,28 @@ class OzonAPI:
         })
         self._debug_review_logged = False  # Log first full review info only
 
+    @staticmethod
+    def _safe_json(response, request_label: str) -> Dict:
+        """Безопасно парсит JSON-ответ и возвращает совместимую ошибку."""
+        try:
+            data = response.json()
+        except ValueError as error:
+            logger.error(
+                f"Ozon API {request_label}: invalid JSON in HTTP {response.status_code}: {error} | body={response.text[:300]}"
+            )
+            return {"error": "invalid_json", "status_code": response.status_code, "details": str(error)}
+
+        if not isinstance(data, dict):
+            logger.error(
+                f"Ozon API {request_label}: unexpected JSON type {type(data).__name__} in HTTP {response.status_code}"
+            )
+            return {
+                "error": "invalid_json",
+                "status_code": response.status_code,
+                "details": f"unexpected json type {type(data).__name__}",
+            }
+
+        return data
     
     def _make_request(self, method: str, endpoint: str, data: dict = None, 
                       retries: int = 3, delay: float = 1.0) -> Optional[dict]:
@@ -36,32 +54,55 @@ class OzonAPI:
     
     def _generic_request(self, method: str, url: str, data: dict = None, 
                          retries: int = 3, delay: float = 1.0) -> Optional[dict]:
+        request_label = f"{method.upper()} {url}"
+
         for attempt in range(retries):
             try:
                 if method.upper() == "POST":
-                    response = self.session.post(url, json=data)
+                    response = self.session.post(url, json=data, timeout=self.REQUEST_TIMEOUT)
                 else:
-                    response = self.session.get(url, params=data)
-                
-                if response.status_code == 403:
-                    logger.warning(f"Ozon API: 403 antibot, attempt {attempt + 1}/{retries}")
-                    if attempt < retries - 1:
-                        time.sleep(delay * (attempt + 1))
-                        continue
-                    return {"error": "antibot", "details": response.text}
-                
-                if response.status_code == 200:
-                    return response.json()
-                else:
-                    logger.error(f"Ozon API: {response.status_code}: {response.text}")
-                    return {"error": response.status_code, "details": response.text}
-                    
-            except requests.exceptions.RequestException as e:
-                logger.error(f"Ozon API request exception: {e}")
+                    response = self.session.get(url, params=data, timeout=self.REQUEST_TIMEOUT)
+
+            except requests.exceptions.Timeout as error:
+                logger.error(f"Ozon API {request_label}: timeout on attempt {attempt + 1}/{retries}: {error}")
                 if attempt < retries - 1:
                     time.sleep(delay * (attempt + 1))
                     continue
-                return {"error": "exception", "details": str(e)}
+                return {"error": "timeout", "details": str(error)}
+
+            except requests.exceptions.ConnectionError as error:
+                logger.error(f"Ozon API {request_label}: connection error on attempt {attempt + 1}/{retries}: {error}")
+                if attempt < retries - 1:
+                    time.sleep(delay * (attempt + 1))
+                    continue
+                return {"error": "connection_error", "details": str(error)}
+
+            except requests.exceptions.RequestException as error:
+                logger.error(f"Ozon API {request_label}: request exception on attempt {attempt + 1}/{retries}: {error}")
+                if attempt < retries - 1:
+                    time.sleep(delay * (attempt + 1))
+                    continue
+                return {"error": "request_exception", "details": str(error)}
+
+            if response.status_code == 403:
+                logger.warning(f"Ozon API {request_label}: 403 antibot, attempt {attempt + 1}/{retries}")
+                if attempt < retries - 1:
+                    time.sleep(delay * (attempt + 1))
+                    continue
+                return {"error": "antibot", "status_code": 403, "details": response.text}
+
+            if response.status_code == 429:
+                logger.warning(f"Ozon API {request_label}: 429 rate limited, attempt {attempt + 1}/{retries}")
+                if attempt < retries - 1:
+                    time.sleep(delay * (attempt + 1))
+                    continue
+                return {"error": "rate_limited", "status_code": 429, "details": response.text}
+
+            if response.status_code == 200:
+                return self._safe_json(response, request_label)
+
+            logger.error(f"Ozon API {request_label}: HTTP {response.status_code}: {response.text}")
+            return {"error": response.status_code, "status_code": response.status_code, "details": response.text}
         
         return {"error": "max_retries"}
     
@@ -114,10 +155,14 @@ class OzonAPI:
         
         while True:
             result = self.get_review_list("UNPROCESSED", limit=100, last_id=last_id)
-            logger.info(f"Ozon API: Raw UNPROCESSED page: {len(result.get('reviews', []))}, has_next: {result.get('has_next', False)}")
-            if "error" in result or not result:
+            if not isinstance(result, dict):
+                logger.error(f"Ozon API: Unexpected review list response type: {type(result).__name__}")
                 break
-            
+
+            if "error" in result:
+                logger.warning(f"Ozon API: review list request failed: {result}")
+                break
+
             reviews = result.get("reviews", [])
             logger.info(f"Ozon API: Raw UNPROCESSED reviews page: {len(reviews)}, has_next: {result.get('has_next', False)}")
             if not reviews:
@@ -126,26 +171,50 @@ class OzonAPI:
             # Enrich with info (rating, text, etc.)
             enriched = []
             for r in reviews:
-                info = self.get_review_info(r["id"])
-                if "error" not in info:
-                    result_info = info.get('result', {}) or info  # Direct if no result wrapper
-                    raw_rating = result_info.get('rating')
+                review_id = r.get("id")
+                if not review_id:
+                    logger.warning(f"Ozon API: Skip review without id: {r}")
+                    continue
+
+                info = self.get_review_info(review_id)
+                if not isinstance(info, dict):
+                    logger.warning(f"Ozon API: Invalid review info response for {review_id}: {type(info).__name__}")
+                    continue
+                if "error" in info:
+                    logger.warning(f"Ozon API: Failed to enrich review {review_id}: {info}")
+                    continue
+
+                result_info = info.get('result', {}) or info  # Direct if no result wrapper
+                if not isinstance(result_info, dict):
+                    logger.warning(
+                        f"Ozon API: Unexpected review info payload type for {review_id}: {type(result_info).__name__}"
+                    )
+                    continue
+
+                raw_rating = result_info.get('rating')
+                try:
                     rating = int(raw_rating) if raw_rating is not None else 5
-                    logger.info(f"{r['id']}: Raw Ozon rating={raw_rating} (type={type(raw_rating)}), extracted={rating}, keys={list(result_info.keys())}")
-                    text = result_info.get('text', '')
-                    logger.debug(f"Ozon API: Enriched {r['id']} rating={rating} text_len={len(text)}")
-                    review_data = {
-                        "id": r["id"],
-                        "review_id": r["id"],
-                        "rating": rating,
-                        "text": text,
-                        "comment": text,
-                        "status": r["status"],
-                        "published_at": r.get("published_at"),
-                        "answer": None  # Unprocessed
-                    }
-                    if rating >= min_rating:
-                        enriched.append(review_data)
+                except (TypeError, ValueError):
+                    logger.warning(f"Ozon API: Invalid rating for {review_id}: {raw_rating!r}, fallback to 5")
+                    rating = 5
+
+                logger.info(
+                    f"{review_id}: Raw Ozon rating={raw_rating} (type={type(raw_rating)}), extracted={rating}, keys={list(result_info.keys())}"
+                )
+                text = result_info.get('text', '')
+                logger.debug(f"Ozon API: Enriched {review_id} rating={rating} text_len={len(text)}")
+                review_data = {
+                    "id": review_id,
+                    "review_id": review_id,
+                    "rating": rating,
+                    "text": text,
+                    "comment": text,
+                    "status": r.get("status"),
+                    "published_at": r.get("published_at"),
+                    "answer": None  # Unprocessed
+                }
+                if rating >= min_rating:
+                    enriched.append(review_data)
             
             all_reviews.extend(enriched)
             

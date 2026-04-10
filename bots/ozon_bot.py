@@ -1,6 +1,7 @@
 """
 Бот для Ozon
 """
+import copy
 from api import OzonAPI
 from .base_bot import BaseBot
 from utils import logger
@@ -10,24 +11,63 @@ from config import config
 class OzonBot(BaseBot):
     """Бот для автоматического ответа на отзывы Ozon"""
     
-    def __init__(self):
+    def __init__(self, account=None):
         super().__init__()
         self.api = None
         self.api_key = ""
         self.company_id = ""
+        self.marketplace = "ozon"
+        self.account = None
+        self.account_id = None
+        self.account_name = "Ozon"
+        self.account_enabled = False
+        if account is not None:
+            self.set_account(account)
+
+    def set_account(self, account):
+        """Привязка бота к конкретному аккаунту."""
+        self.account = copy.deepcopy(account)
+        self._apply_account(self.account)
+
+    def _apply_account(self, account):
+        """Применение account metadata и секретов."""
+        self.account_id = account.get("id")
+        self.account_name = account.get("name") or "Ozon"
+        self.account_enabled = bool(account.get("enabled", False))
+        self.api_key = account.get("api_key", "")
+        self.company_id = account.get("company_id", "")
+
+    def _resolve_account(self):
+        """Получение account config для текущего runtime-бота."""
+        if self.account is not None:
+            return copy.deepcopy(self.account)
+
+        for account in config.get_accounts():
+            if account.get("marketplace") == self.marketplace:
+                return copy.deepcopy(account)
+
+        ozon_config = config.get("ozon")
+        if not ozon_config:
+            return None
+
+        return {
+            "id": "ozon-legacy",
+            "name": "Ozon",
+            "marketplace": self.marketplace,
+            "enabled": ozon_config.get("enabled", False),
+            "api_key": ozon_config.get("api_key", ""),
+            "company_id": ozon_config.get("company_id", ""),
+        }
     
     def connect(self) -> bool:
         """Подключение к API Ozon"""
         try:
-            # Получение настроек из конфигурации
-            ozon_config = config.get("ozon")
-            
-            if not ozon_config:
+            account = self._resolve_account()
+            if not account:
                 logger.error("Ozon: Конфигурация не найдена")
                 return False
-            
-            self.api_key = ozon_config.get("api_key", "")
-            self.company_id = ozon_config.get("company_id", "")
+
+            self._apply_account(account)
             
             if not self.api_key or not self.company_id:
                 logger.error("Ozon: API ключ или Company ID не настроены")
@@ -95,9 +135,18 @@ class OzonBot(BaseBot):
     
     def get_status(self):
         """Получение статуса бота"""
+        if self.account_id is None:
+            account = self._resolve_account()
+            if account:
+                self._apply_account(account)
+
         base_status = super().get_status()
         base_status.update({
             "name": "Ozon",
+            "marketplace": self.marketplace,
+            "account_id": self.account_id,
+            "account_name": self.account_name,
+            "account_enabled": self.account_enabled,
             "api_key_configured": bool(self.api_key),
             "company_id_configured": bool(self.company_id)
         })
